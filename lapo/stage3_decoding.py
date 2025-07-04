@@ -29,6 +29,16 @@ policy = utils.create_policy(
     strict_loading=True,
 )
 
+# Multi-GPU support
+if torch.cuda.is_available():
+    device = torch.device('cuda')
+    if torch.cuda.device_count() > 1:
+        policy = torch.nn.DataParallel(policy)
+        idm = torch.nn.DataParallel(idm)
+    policy = policy.to(device)
+else:
+    device = torch.device('cpu')
+
 policy.decoder = create_decoder(
     in_dim=cfg.model.la_dim,
     out_dim=cfg.model.ta_dim,
@@ -99,6 +109,8 @@ buf_ta = []
 
 
 def action_selection_hook(next_obs: torch.Tensor, global_step: int = None, action=None):
+    # Move next_obs to device
+    next_obs = next_obs.to(device)
     # sample action
     hidden_base = policy.conv_stack(next_obs)
 
@@ -119,7 +131,7 @@ def action_selection_hook(next_obs: torch.Tensor, global_step: int = None, actio
         # update sl-dec data buffer
         buf_obs.append(next_obs.unsqueeze(1))
         if len(buf_obs) == 3:
-            buf_la.append(idm(torch.cat(list(buf_obs), dim=1))[0]["la"])
+            buf_la.append(idm(torch.cat(list(buf_obs), dim=1).to(device))[0]["la"])
         buf_ta.append(action)
 
     return action, probs.log_prob(action), probs.entropy(), policy.value_head(hidden_rl)
@@ -136,8 +148,8 @@ def reset_decoder(decoder):
 def post_update_hook(update, global_step):
     if 10_000 < global_step < 400_000 and (global_step < 50_000 or update % 20 == 0):
         # do decoder online SL training step
-        train_ta = torch.stack(buf_ta)[1:-1].flatten(0, 1)
-        train_la = torch.stack(buf_la).flatten(0, 1)
+        train_ta = torch.stack(buf_ta)[1:-1].flatten(0, 1).to(device)
+        train_la = torch.stack(buf_la).flatten(0, 1).to(device)
 
         reset_decoder(policy.decoder)
 
@@ -149,6 +161,8 @@ def post_update_hook(update, global_step):
         num_epochs = 3
         for epoch in range(num_epochs):
             for inputs, labels in dataloader:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
                 decoder_opt.zero_grad()
                 outputs = policy.decoder(inputs)
 

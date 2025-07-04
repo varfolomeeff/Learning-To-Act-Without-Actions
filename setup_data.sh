@@ -1,24 +1,26 @@
 #!/bin/bash
 
+eval "$(micromamba shell hook -s bash)"
+
 # uncomment all the tasks that you want to download the data for
 # note: some tasks's datasets are much large than others due to compression differences
 download_tasks=(
     bigfish
-    # bossfight
-    # caveflyer
-    # chaser
-    # climber
-    # coinrun
-    # dodgeball
-    # fruitbot
-    # heist
-    # jumper
-    # leaper
-    # maze
-    # miner
-    # ninja
-    # plunder
-    # starpilot
+    bossfight
+    caveflyer
+    chaser
+    climber
+    coinrun
+    dodgeball
+    fruitbot
+    heist
+    jumper
+    leaper
+    maze
+    miner
+    ninja
+    plunder
+    starpilot
 )
 
 # maps task names to google drive file ids
@@ -45,8 +47,10 @@ declare -A task_to_file_id=(
 for i in "${!download_tasks[@]}"; do
     task=${download_tasks[$i]}
     file_id=${task_to_file_id[$task]}
+    micromamba activate lapo
     echo "---> [$i/${#download_tasks[@]}] Downloading *$task* (id=$file_id)"
 
     gdown --continue --output lapo/expert_data/$task.zip $file_id
-    unzip -q -o lapo/expert_data/$task.zip -d lapo/expert_data && rm lapo/expert_data/$task.zip
+    unzip -q -o lapo/expert_data/$task.zip -d lapo/expert_data
+    rm lapo/expert_data/$task.zip
 done

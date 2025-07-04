@@ -75,7 +75,12 @@ def create_policy(
 
 def eval_latent_repr(labeled_data: data_loader.DataStager, idm: IDM):
     batch = labeled_data.td_unfolded[:131072]
-    actions = idm.label_chunked(batch).select("ta", "la").to(config.DEVICE)
+    # Use .module if model is DataParallel
+    if isinstance(idm, torch.nn.DataParallel):
+        label_chunked = idm.module.label_chunked
+    else:
+        label_chunked = idm.label_chunked
+    actions = label_chunked(batch).select("ta", "la").to(config.DEVICE)
     return train_decoder(data=actions)
 
 

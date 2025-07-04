@@ -22,6 +22,16 @@ idm, _ = utils.create_dynamics_models(cfg.model, state_dicts=state_dicts)
 idm.eval()
 
 policy = utils.create_policy(cfg.model, cfg.model.la_dim)
+
+# Multi-GPU support
+if torch.cuda.is_available():
+    device = torch.device('cuda')
+    if torch.cuda.device_count() > 1:
+        policy = torch.nn.DataParallel(policy)
+    policy = policy.to(device)
+else:
+    device = torch.device('cpu')
+
 opt, lr_sched = doy.LRScheduler.make(
     policy=(
         doy.PiecewiseLinearSchedule(
@@ -47,6 +57,11 @@ for step in loop(
 
     policy.train()
     batch = next(train_iter)
+    # Move batch to device if it's a tensor or dict of tensors
+    if isinstance(batch, dict):
+        batch = {k: v.to(device) if hasattr(v, 'to') else v for k, v in batch.items()}
+    elif hasattr(batch, 'to'):
+        batch = batch.to(device)
     idm.label(batch)
 
     preds = policy(batch["obs"][:, -2])  # the -2 selects last the pre-transition ob
@@ -65,6 +80,11 @@ for step in loop(
     if step % 200 == 0:
         policy.eval()
         test_batch = next(test_iter)
+        # Move test_batch to device if it's a tensor or dict of tensors
+        if isinstance(test_batch, dict):
+            test_batch = {k: v.to(device) if hasattr(v, 'to') else v for k, v in test_batch.items()}
+        elif hasattr(test_batch, 'to'):
+            test_batch = test_batch.to(device)
         idm.label(test_batch)
         test_loss = F.mse_loss(policy(test_batch["obs"][:, -2]), test_batch["la"])
         logger(step=step, test_loss=test_loss)
