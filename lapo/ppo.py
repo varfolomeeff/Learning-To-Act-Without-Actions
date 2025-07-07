@@ -264,9 +264,6 @@ def train(
                         global_step=global_step + substep,
                         episodic_return=item["episode"]["r"],
                         episodic_length=item["episode"]["l"],
-                        episodic_return_norm=envs.normalize_return(
-                            item["episode"]["r"]
-                        ),
                     )
                     break
             global_step += 1 * rl_cfg.num_envs

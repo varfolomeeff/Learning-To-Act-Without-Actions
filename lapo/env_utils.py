@@ -1,20 +1,20 @@
 """ some hardcoded data/constants + utility functions for RL env setup """
 
-from functools import partial
+# from functools import partial
 
-import doy
+# import doy
 import gym
 import numpy as np
 from procgen import ProcgenEnv
 
 
-def normalize_return(ep_ret, env_name):
-    """normalizes returns based on URP and expert returns above"""
-    return doy.normalize_into_range(
-        lower=urp_ep_return[env_name],
-        upper=expert_ep_return[env_name],
-        v=ep_ret,
-    )
+# def normalize_return(ep_ret, env_name):
+#     """normalizes returns based on URP and expert returns above"""
+#     return doy.normalize_into_range(
+#         lower=urp_ep_return[env_name],
+#         upper=expert_ep_return[env_name],
+#         v=ep_ret,
+#     )
 
 
 def setup_procgen_env(num_envs, env_id, gamma):
@@ -31,13 +31,13 @@ def setup_procgen_env(num_envs, env_id, gamma):
     envs.single_observation_space = envs.observation_space["rgb"]
     envs.is_vector_env = True
     envs = gym.wrappers.RecordEpisodeStatistics(envs)
-    envs = gym.wrappers.NormalizeReward(envs, gamma=gamma)
-    envs = gym.wrappers.TransformReward(envs, lambda reward: np.clip(reward, -10, 10))
+    # envs = gym.wrappers.NormalizeReward(envs, gamma=gamma)
+    # envs = gym.wrappers.TransformReward(envs, lambda reward: np.clip(reward, -10, 10))
     assert isinstance(
         envs.single_action_space, gym.spaces.Discrete
     ), "only discrete action space is supported"
 
-    envs.normalize_return = partial(normalize_return, env_name=env_id)
+    # envs.normalize_return = partial(normalize_return, env_name=env_id)
     return envs
 
 

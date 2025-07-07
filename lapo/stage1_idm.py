@@ -6,6 +6,12 @@ import torch
 import utils
 from doy import loop
 import torch.nn as nn
+import numpy
+from torch.serialization import add_safe_globals
+import sys
+
+# Remove gpu=... from sys.argv before config parsing
+sys.argv = [arg for arg in sys.argv if not arg.startswith("gpu=")]
 
 cfg = config.get()
 doy.print("[bold green]Running LAPO stage 1 (IDM/FDM training) with config:")
@@ -15,20 +21,29 @@ run, logger = config.wandb_init("lapo_stage1", config.get_wandb_cfg(cfg))
 
 idm, wm = utils.create_dynamics_models(cfg.model)
 
-# Multi-GPU support
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-    idm = idm.to(device)
-    wm = wm.to(device)
-    if torch.cuda.device_count() > 1:
-        idm = torch.nn.DataParallel(idm)
-        wm = torch.nn.DataParallel(wm)
-    print("CUDA device count:", torch.cuda.device_count())
-else:
-    device = torch.device('cpu')
+def get_arg(name, default):
+    for arg in sys.argv:
+        if arg.startswith(f"{name}="):
+            return arg.split("=", 1)[1]
+    return default
 
-print("Using DataParallel:", isinstance(idm, torch.nn.DataParallel))
-print("CUDA device count:", torch.cuda.device_count())
+gpu = int(get_arg("gpu", 0))
+device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+
+# # Multi-GPU support
+# if torch.cuda.is_available():
+# device = torch.device('cuda')
+#     idm = idm.to(device)
+#     wm = wm.to(device)
+#     if torch.cuda.device_count() > 1:
+#         idm = torch.nn.DataParallel(idm)
+#         wm = torch.nn.DataParallel(wm)
+#     print("CUDA device count:", torch.cuda.device_count())
+# else:
+#     device = torch.device('cpu')
+
+# print("Using DataParallel:", isinstance(idm, torch.nn.DataParallel))
+# print("CUDA device count:", torch.cuda.device_count())
 
 train_data, test_data = data_loader.load(cfg.env_name)
 train_iter = train_data.get_iter(cfg.stage1.bs)
@@ -49,7 +64,7 @@ def print_device(self, *args, **kwargs):
     return self._original_forward(*args, **kwargs)
 
 idm._original_forward = idm.forward
-idm.forward = print_device.__get__(idm, type(idm))
+# idm.forward = print_device.__get__(idm, type(idm))
 
 def train_step():
     idm.train()
@@ -123,20 +138,13 @@ for step in loop(cfg.stage1.steps + 1, desc="[green bold](stage-1) Training IDM 
                 cfg=cfg,
                 logger=logger,
             ),
-            paths.get_models_path(cfg.exp_name),
+            paths.get_models_path(cfg.exp_name)
         )
 
-import torch
-import torch.nn as nn
+add_safe_globals([numpy.core.multiarray.scalar])
 
-class ToyModel(nn.Module):
-    def forward(self, x):
-        print(f"Device in forward: {x.device}, id: {torch.cuda.current_device()}")
-        return x.sum()
-
-model = ToyModel().cuda()
-if torch.cuda.device_count() > 1:
-    model = torch.nn.DataParallel(model)
-model = model.to(device)
-x = torch.randn(32, 3, 224, 224).cuda()
-model(x)
+state_dicts = torch.load(
+    paths.get_models_path(config.get().exp_name),
+    map_location='cpu',
+    weights_only=False
+)

@@ -411,6 +411,16 @@ class IDM(nn.Module):
         return data
 
 
+class LinearDecoder(nn.Module):
+    """z -> actions"""
+    def __init__(self, z_dim=128, n_actions=15):
+        super().__init__()
+        self.fc = nn.Linear(z_dim, n_actions, bias=False)
+    def forward(self, z):
+        return self.fc(z)                   
+
+
+
 if __name__ == "__main__":
     import torchinfo
 

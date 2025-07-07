@@ -6,8 +6,28 @@ import torch
 import torch.nn.functional as F
 import utils
 from doy import loop
+import numpy
+from torch.serialization import add_safe_globals
+import sys
 
-state_dicts = torch.load(paths.get_models_path(config.get().exp_name))
+sys.argv = [arg for arg in sys.argv if not arg.startswith("gpu=")]
+
+add_safe_globals([numpy.core.multiarray.scalar])
+
+def clean_state_dict(state_dict):
+    """Removes 'module.' prefix from state_dict keys if present."""
+    from collections import OrderedDict
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        new_key = k.replace("module.", "") if k.startswith("module.") else k
+        new_state_dict[new_key] = v
+    return new_state_dict
+
+state_dicts = torch.load(
+    paths.get_models_path(config.get().exp_name),
+    map_location='cpu',
+    weights_only=False
+)
 cfg = config.get(base_cfg=state_dicts["cfg"], reload_keys=["stage2", "stage3"])
 cfg.stage_exp_name = doy.random_proquint(1)
 doy.print("[bold green]Running LAPO stage 2 (latent behavior cloning) with config:")
@@ -18,19 +38,31 @@ if state_dicts["step"] != cfg.stage1.steps:
         f"[bold red]Warning: using IDM/WM from incomplete training run {state_dicts['step']}/{cfg.stage1.steps} steps"
     )
 
+state_dicts["idm"] = clean_state_dict(state_dicts["idm"])
+state_dicts["wm"] = clean_state_dict(state_dicts["wm"])
 idm, _ = utils.create_dynamics_models(cfg.model, state_dicts=state_dicts)
 idm.eval()
 
 policy = utils.create_policy(cfg.model, cfg.model.la_dim)
 
+# get gpu from command line
+def get_arg(name, default):
+    for arg in sys.argv:
+        if arg.startswith(f"{name}="):
+            return arg.split("=", 1)[1]
+    return default
+
+gpu = int(get_arg("gpu", 0))
+device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+
 # Multi-GPU support
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-    if torch.cuda.device_count() > 1:
-        policy = torch.nn.DataParallel(policy)
-    policy = policy.to(device)
-else:
-    device = torch.device('cpu')
+# if torch.cuda.is_available():
+#     device = torch.device('cuda')
+#     if torch.cuda.device_count() > 1:
+#         policy = torch.nn.DataParallel(policy)
+#     policy = policy.to(device)
+# else:
+#     device = torch.device('cpu')
 
 opt, lr_sched = doy.LRScheduler.make(
     policy=(

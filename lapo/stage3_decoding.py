@@ -15,9 +15,28 @@ from doy import PiecewiseLinearSchedule as PLS
 from torch.distributions import Categorical
 from torch.utils.data import DataLoader, TensorDataset
 from utils import create_decoder
+import sys
 
-state_dict = torch.load(paths.get_latent_policy_path(config.get().exp_name))
-cfg = config.get(base_cfg=state_dict["cfg"], reload_keys=["stage3"])
+sys.argv = [arg for arg in sys.argv if not arg.startswith("gpu=")]
+
+def clean_state_dict(state_dict):
+    """Removes 'module.' prefix from state_dict keys if present."""
+    from collections import OrderedDict
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        new_key = k.replace("module.", "") if k.startswith("module.") else k
+        new_state_dict[new_key] = v
+    return new_state_dict
+
+state_dicts = torch.load(
+    paths.get_models_path(config.get().exp_name),
+    map_location='cpu',
+    weights_only=False
+)
+
+cfg = config.get(base_cfg=state_dicts["cfg"], reload_keys=["stage3"])
+if cfg.stage_exp_name is None:
+    cfg.stage_exp_name = ""
 cfg.stage_exp_name += doy.random_proquint(1)
 doy.print("[bold green]Running LAPO stage 3 (latent policy decoding) with config:")
 config.print_cfg(cfg)
@@ -25,19 +44,30 @@ config.print_cfg(cfg)
 policy = utils.create_policy(
     cfg.model,
     action_dim=cfg.model.la_dim,
-    state_dict=state_dict["policy"],
+    state_dict=state_dicts["policy"],
     strict_loading=True,
 )
 
-# Multi-GPU support
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-    if torch.cuda.device_count() > 1:
-        policy = torch.nn.DataParallel(policy)
-        idm = torch.nn.DataParallel(idm)
-    policy = policy.to(device)
-else:
-    device = torch.device('cpu')
+
+# get gpu from command line
+def get_arg(name, default):
+    for arg in sys.argv:
+        if arg.startswith(f"{name}="):
+            return arg.split("=", 1)[1]
+    return default
+
+gpu = int(get_arg("gpu", 0))
+device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+
+# # Multi-GPU support
+# if torch.cuda.is_available():
+#     device = torch.device('cuda')
+#     if torch.cuda.device_count() > 1:
+#         policy = torch.nn.DataParallel(policy)
+#         idm = torch.nn.DataParallel(idm)
+#     policy = policy.to(device)
+# else:
+#     device = torch.device('cpu')
 
 policy.decoder = create_decoder(
     in_dim=cfg.model.la_dim,

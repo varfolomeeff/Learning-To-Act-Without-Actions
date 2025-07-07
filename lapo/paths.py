@@ -31,5 +31,9 @@ def get_latent_policy_path(exp_name):
     return get_experiment_dir(exp_name) / "latent_policy.pt"
 
 
+def get_mlp_jepa_path(exp_name):
+    return get_experiment_dir(exp_name) / "lapo_vjepa_epoch100.pt"
+
+
 def get_decoded_policy_path(exp_name):
     return get_experiment_dir(exp_name) / "decoded_policy.pt"

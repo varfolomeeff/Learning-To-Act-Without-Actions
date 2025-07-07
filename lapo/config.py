@@ -82,6 +82,14 @@ class Stage3Config:
 
 
 @dataclass
+class MLP3Config:
+    mode: str
+    offline_data: str
+    epochs: int
+    lr: float
+
+
+@dataclass
 class Config:
     env_name: str
     exp_name: str
@@ -91,7 +99,7 @@ class Config:
     stage1: Stage1Config
     stage2: Stage2Config
     stage3: Stage3Config
-
+    mlp_mapping: MLP3Config
 
 def get(
     base_cfg: DictConfig | None = None,
@@ -117,9 +125,10 @@ def get(
     if override_args is not None:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(override_args))
 
-    _apply_runtime_vals(cfg)  # type: ignore
+    # _apply_runtime_vals(cfg)  # type: ignore
 
     cfg_schema: Config = OmegaConf.structured(Config)
+    
     return OmegaConf.merge(cfg_schema, cfg)
 
 
