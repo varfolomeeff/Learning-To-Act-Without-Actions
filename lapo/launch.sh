@@ -37,7 +37,6 @@ echo $gpu
 	exp_name="${ind}_${sweep_name}"
 	echo $exp_name
 # python stage1_idm.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu" &&
-# python stage2_bc.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu" &&
+python stage2_bc.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu"
 # python stage3_decoding.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu"
-python mlp_mapping.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu"
-# done
+# python mlp_mapping.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu"

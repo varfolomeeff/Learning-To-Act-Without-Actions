@@ -34,10 +34,19 @@ ind=0
 gpu=$1  # Set your desired GPU index here
 echo $gpu
 	# generate a random experiment name that's the same across stages 1-3
-	exp_name="0_kanip-lipub"
+	exp_name="${ind}_${sweep_name}"
 	echo $exp_name
-# python stage1_idm.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu" &&
-# python stage2_bc.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu" &&
-# python stage3_decoding.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu"
-python mlp_mapping.py env_name="bigfish" exp_name="${exp_name}" gpu="$gpu"
+tr_list=(16 64 256 1024 4096)
+# for ind in "${tr_list[@]}"; do
+	# python extract_actions.py --N $ind
+	# sleep 3
+	# echo "stage 1 done"
+	# # NOTE: mlp_mapping.py should parse env_name and exp_name from sys.argv as key=value
+	python mlp_mapping.py gpu="$gpu" --npz 4096 --env_name "${tasks[0]}" --exp_name "${exp_name}"
+	echo "stage 2 done"
+	# sleep 3
+	# python evaluate.py "${exp_name}" 4096 "bigfish" 100 cuda:1
+	sleep 3
+	echo "stage 3 done"
+	# sleep 10
 # done

@@ -1,5 +1,6 @@
 import sys 
 import doy
+import argparse
 
 import numpy as np, glob, os, random, tqdm
 import torch
@@ -9,11 +10,12 @@ import torch.nn.functional as F
 import config, paths
 import utils
 from models import LinearDecoder
+from omegaconf import OmegaConf
+from evaluate import load_and_evaluate_policy
 
 
 sys.argv = [arg for arg in sys.argv if not arg.startswith("gpu=")]
 
-# get gpu from command line
 def get_arg(name, default):
     for arg in sys.argv:
         if arg.startswith(f"{name}="):
@@ -23,51 +25,150 @@ def get_arg(name, default):
 gpu = int(get_arg("gpu", 0))
 device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--npz', type=int, default=256, help='Number in the offline_decoder_data/{env_name}_{npz}.npz filename')
+parser.add_argument('--env_name', type=str, default='bigfish', help='Environment name')
+parser.add_argument('--exp_name', type=str, required=True, help='Experiment name')
+args = parser.parse_args()
+
+env_name = args.env_name
+exp_name = args.exp_name
+
+print(f"env_name: {env_name}")
+
+def remove_script_keys(d):
+    if isinstance(d, dict):
+        keys_to_remove = [k for k in d if str(k).startswith('--')]
+        for k in keys_to_remove:
+            del d[k]
+        for v in d.values():
+            remove_script_keys(v)
+    elif isinstance(d, list):
+        for item in d:
+            remove_script_keys(item)
+    elif hasattr(d, 'keys') and callable(d.keys):  # OmegaConf DictConfig
+        keys_to_remove = [k for k in d.keys() if str(k).startswith('--')]
+        for k in keys_to_remove:
+            del d[k]
+        for k in d.keys():
+            remove_script_keys(d[k])
+
+def print_all_keys(d, prefix=''):
+    if isinstance(d, dict):
+        for k, v in d.items():
+            print(f"{prefix}{k}")
+            print_all_keys(v, prefix + '  ')
+    elif isinstance(d, list):
+        for i, item in enumerate(d):
+            print_all_keys(item, prefix + f'[{i}] ')
+
 state_dicts = torch.load(
-    paths.get_latent_policy_path(config.get().exp_name),
+    paths.get_latent_policy_path(exp_name),
     map_location='cpu',
     weights_only=False
 )
+print('All keys in state_dicts["cfg"] after loading:')
+# print_all_keys(state_dicts["cfg"])
+remove_script_keys(state_dicts["cfg"])  # Clean loaded config
 
-print(state_dicts.keys())
+if isinstance(state_dicts["cfg"], dict):
+    base_cfg = state_dicts["cfg"]
+else:
+    base_cfg = OmegaConf.to_container(state_dicts["cfg"], resolve=True)
+base_cfg["env_name"] = env_name
+if not isinstance(base_cfg, dict):
+    base_cfg = OmegaConf.to_container(base_cfg, resolve=True)
+remove_script_keys(base_cfg)  # Clean again before merging
 
-cfg = config.get(base_cfg=state_dicts["cfg"], reload_keys=["mlp_mapping"])
+print('All keys in base_cfg before merging:')
+print_all_keys(base_cfg)
+
+cfg = config.get(base_cfg=base_cfg, reload_keys=["mlp_mapping"], use_cli_args=False)
 if cfg.stage_exp_name is None:
     cfg.stage_exp_name = ""
 cfg.stage_exp_name += doy.random_proquint(1)
-# doy.print("[bold green]Running LAPO mlp mapping (latent policy decoding) with config:")
-# config.print_cfg(cfg)
 
 policy = utils.create_policy(cfg.model,
                              action_dim=cfg.model.la_dim,
                              state_dict=state_dicts["policy"],
                              strict_loading=True)
+policy = policy.to(device)
+policy.eval()
+
 for p in policy.parameters():           
     p.requires_grad_(False)
 
-print(dir(policy))
+decoder = LinearDecoder().to(device)
 
-policy.decoder = LinearDecoder().to(device)
+npz_number = args.npz
+npz_path = f"offline_decoder_data/{env_name}_{npz_number}.npz"
 
-data_npz = np.load(cfg.mlp_mapping.offline_data)
-dataset  = torch.utils.data.TensorDataset(
-              torch.tensor(data_npz["obs"]).float()/255.,
-              torch.tensor(data_npz["ta"]).long())
-loader   = torch.utils.data.DataLoader(dataset,
-              batch_size=256, shuffle=True, drop_last=True)
+data_npz = np.load(npz_path)
 
-opt = torch.optim.Adam(policy.decoder.parameters(), lr=1e-3)
+def normalize_obs(obs: torch.Tensor) -> torch.Tensor:
+    # obs should be uint8 (not floating point) before normalization
+    assert not torch.is_floating_point(obs), "Observation tensor should be uint8 before normalization"
+    return obs.float() / 255.0 - 0.5
+
+obs_data = torch.tensor(data_npz["obs"])
+obs_data = normalize_obs(obs_data)
+# Ensure obs_data shape is (batch, height, width, channels) before permute
+if obs_data.ndim != 4 or obs_data.shape[-1] not in [1, 3]:
+    raise ValueError(f"Unexpected obs_data shape: {obs_data.shape}")
+obs_data = obs_data.permute(0, 3, 1, 2)  # (batch, height, width, channels) -> (batch, channels, height, width)
+
+dataset = torch.utils.data.TensorDataset(
+    obs_data,
+    torch.tensor(data_npz["ta"]).long()
+)
+loader = torch.utils.data.DataLoader(
+    dataset,
+    batch_size=256, 
+    shuffle=True, 
+    drop_last=False
+)
+
+print("Dataset size:", len(dataset))
+
+opt = torch.optim.Adam(decoder.parameters(), lr=1e-3)
+
 for epoch in range(cfg.mlp_mapping.epochs):         
+    epoch_loss = 0
+    num_batches = 0
+
     for obs, ta in loader:
         obs = obs.to(device)
+        ta = ta.to(device)
+
         with torch.no_grad():
-            z = policy.encoder(obs)           
-        logits = policy.decoder(z)
-        loss = torch.nn.functional.cross_entropy(logits, ta.to(device))
-        opt.zero_grad(); loss.backward(); opt.step()
+            latent_actions = policy(obs)
 
-checkpoint_path = paths.get_decoded_policy_path(cfg.exp_name)
-torch.save(policy.decoder.state_dict(), checkpoint_path)
-print(f"[bold green]Saved decoder checkpoint to {checkpoint_path}")
+        action_logits = decoder(latent_actions)
 
+        loss = torch.nn.functional.cross_entropy(action_logits, ta)
 
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+
+        epoch_loss += loss.item()
+        num_batches += 1
+
+    avg_loss = epoch_loss / num_batches if num_batches > 0 else float('nan')
+    print(f"Epoch {epoch+1}/{cfg.mlp_mapping.epochs}, Loss: {avg_loss:.4f}")
+    # Save checkpoint every 1000 epochs (excluding epoch 0)
+    if epoch > 0 and epoch % 200 == 0:
+        base_dir = paths.get_experiment_dir(exp_name)
+        checkpoint_name = f"decoded_policy_{npz_number}_epoch{epoch}.pt"
+        checkpoint_path = base_dir / checkpoint_name
+        torch.save({
+            'decoder_state_dict': decoder.state_dict(),
+            'cfg': cfg
+        }, checkpoint_path)
+        print(f"Saved decoder checkpoint to {checkpoint_path}")
+        # Evaluate after saving checkpoint
+        print(f"Evaluating decoder at epoch {epoch}...")
+        mean_return, std_return, returns = load_and_evaluate_policy(
+            checkpoint_path, npz_number, env_name, num_episodes=10, device=str(device)
+        )
+        print(f"Eval result at epoch {epoch}: mean_return={mean_return:.2f} ± {std_return:.2f}")
