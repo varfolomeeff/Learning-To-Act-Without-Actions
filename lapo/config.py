@@ -114,7 +114,9 @@ def get(
         # base_cfg is a structured config and won't let us update it with a generic dict
         # Instead we turn base_cfg into a DictConfig, then update it with reloaded keys,
         # and then apply other patches and checks
-        cfg = OmegaConf.create(OmegaConf.to_container(base_cfg))
+        if not isinstance(base_cfg, dict):
+            base_cfg = OmegaConf.to_container(base_cfg, resolve=True)
+        cfg = OmegaConf.create(base_cfg)
         cfg.update(OmegaConf.masked_copy(file_cfg, reload_keys))  # type: ignore
     else:
         cfg = file_cfg

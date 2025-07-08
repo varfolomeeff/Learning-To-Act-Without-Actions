@@ -51,6 +51,6 @@ stage3:
 mlp_mapping:
   mode:        offline_bc
   offline_data: offline_decoder_data/bigfish_256.npz
-  epochs:      3
+  epochs:      50000
   lr:          1e-3
 

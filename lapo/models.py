@@ -415,7 +415,11 @@ class LinearDecoder(nn.Module):
     """z -> actions"""
     def __init__(self, z_dim=128, n_actions=15):
         super().__init__()
-        self.fc = nn.Linear(z_dim, n_actions, bias=False)
+        self.fc = nn.Sequential(
+            nn.Linear(z_dim, 256),
+            nn.GELU(),
+            nn.Linear(256, n_actions)
+        )
     def forward(self, z):
         return self.fc(z)                   
 

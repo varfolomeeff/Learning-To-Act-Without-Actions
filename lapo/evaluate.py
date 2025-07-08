@@ -1,154 +1,239 @@
 import torch
 import numpy as np
-import argparse
-from pathlib import Path
-from typing import Literal
+import config
 import env_utils
+import paths
+import utils
 from collections import deque
 from functools import partial
 import torch.nn.functional as F
 from torch.distributions import Categorical
-from torch import nn
-from transformers import AutoModel, AutoVideoProcessor
+from omegaconf import OmegaConf
+import logging
+import datetime
+import os
+from models import LinearDecoder
+from data_loader import normalize_obs
 
+# Создаем директорию для логов, если её нет
+os.makedirs("logs", exist_ok=True)
 
-class VJEPAActionPolicy(nn.Module):
-    def __init__(self, num_actions: int = 15, train_backbone: bool = False):
-        super().__init__()
-        self.backbone = AutoModel.from_pretrained("facebook/vjepa2-vitl-fpc64-256")
-        for p in self.backbone.parameters():
-            p.requires_grad = train_backbone
-        self.embed_dim = self.backbone.config.hidden_size  # 1024 for ViT‑L
-        self.head = nn.Sequential(
-            nn.Linear(self.embed_dim, 512),
-            nn.GELU(),
-            nn.Linear(512, num_actions),
-        )
-
-    def forward(self, pixel_values_videos: torch.Tensor):
-        with torch.set_grad_enabled(self.backbone.training):
-            out = self.backbone(pixel_values_videos=pixel_values_videos, output_hidden_states=False)
-        embed = out.pooler_output if getattr(out, "pooler_output", None) is not None else out.last_hidden_state.mean(dim=1)
-        return self.head(embed)
-
-
-def preprocess_observation(obs, processor, num_frames=1, image_size=256, dtype=torch.float32):
-    if obs.ndim == 4:  # (batch, height, width, channels)
-        obs = obs[0]  # Take first (and only) observation
+def setup_logger(exp_name=None):
+    """Настройка логгера с правильным именем файла"""
+    # Удаляем все существующие обработчики
+    logger = logging.getLogger()
+    logger.handlers = []
     
-    video = obs[np.newaxis, ...] if num_frames == 1 else np.repeat(obs[np.newaxis, ...], num_frames, axis=0)
+    # Создаем новую конфигурацию
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
     
-    processed = processor(video, return_tensors="pt")["pixel_values_videos"].to(dtype)
+    # Файловый обработчик
+    if exp_name:
+        now_str = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_filename = f"logs/evaluate_{exp_name}_{now_str}.log"
+    else:
+        log_filename = "logs/evaluate.log"
     
-    return processed
+    file_handler = logging.FileHandler(log_filename, mode='a')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Консольный обработчик
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    return logger, log_filename
 
+# Инициализируем базовый логгер
+logger, _ = setup_logger()
 
-def evaluate_agent(policy, env_name, num_episodes=100, device='cuda', num_frames=1, image_size=256):
+def evaluate_agent(policy, decoder, env_name, num_episodes=100, device='cuda'):
+    """
+    Evaluate agent in environment for given number of episodes.
+    
+    Args:
+        policy: trained policy network (generates latent actions)
+        decoder: decoder network (converts latent actions to real actions)
+        env_name: name of the procgen environment
+        num_episodes: number of episodes to evaluate
+        device: device to run policy on
+    
+    Returns:
+        mean_return: average return across all episodes
+        std_return: standard deviation of returns
+        returns: list of all episode returns
+    """
     env = env_utils.setup_procgen_env(
         num_envs=1,
         env_id=env_name,
         gamma=0.99
     )
     
-    processor = AutoVideoProcessor.from_pretrained(
-        "facebook/vjepa2-vitl-fpc64-256",
-        size={"height": image_size, "width": image_size},
-        do_center_crop=True,
-        do_rescale=True,
-        do_normalize=True,
-    )
-    
     policy.eval()
+    decoder.eval()
     returns = []
+    
+    logger.info(f"Starting evaluation for {num_episodes} episodes in {env_name}")
     
     for episode in range(num_episodes):
         obs = env.reset()
+        obs = torch.from_numpy(obs).permute((0, 3, 1, 2)).to(device)
+        obs = normalize_obs(obs)
         episode_return = 0
         done = [False]
+        step_count = 0
         
         while not done[0]:
             with torch.no_grad():
-                processed_obs = preprocess_observation(
-                    obs, processor, num_frames, image_size, policy.head[0].weight.dtype
-                ).to(device)
+                # Get latent actions from policy
+                latent_actions = policy(obs)
                 
-                logits = policy(processed_obs)
-                probs = Categorical(logits=logits)
-                action = probs.sample()
+                # Decode latent actions to real action logits
+                action_logits = decoder(latent_actions)
+                
+                # Sample action
+                dist = Categorical(logits=action_logits)
+                action = dist.probs.argmax(dim=-1)
             
             next_obs, reward, done, info = env.step(action.cpu().numpy())
             episode_return += reward[0]
-            obs = next_obs
+            next_obs = torch.from_numpy(next_obs).permute((0, 3, 1, 2)).to(device)
+            obs = normalize_obs(next_obs)
+            step_count += 1
         
         returns.append(episode_return)
-        print(f"Episode {episode + 1}/{num_episodes}: Return = {episode_return:.2f}")
     
     env.close()
     
+    sum_return = np.sum(returns)
     mean_return = np.mean(returns)
     std_return = np.std(returns)
     
-    print(f"\nEvaluation Results:")
-    print(f"Mean Return: {mean_return:.2f} ± {std_return:.2f}")
-    print(f"Min Return: {np.min(returns):.2f}")
-    print(f"Max Return: {np.max(returns):.2f}")
+    # Логируем результаты оценки
+    logger.info("="*50)
+    logger.info("EVALUATION RESULTS:")
+    logger.info(f"Environment: {env_name}")
+    logger.info(f"Number of episodes: {num_episodes}")
+    logger.info(f"Total Return: {sum_return:.2f}")
+    logger.info(f"Mean Return: {mean_return:.2f} ± {std_return:.2f}")
+    logger.info(f"Min Return: {np.min(returns):.2f}")
+    logger.info(f"Max Return: {np.max(returns):.2f}")
+    logger.info(f"All returns: {returns}")
+    logger.info("="*50)
     
     return mean_return, std_return, returns
 
 
-def load_and_evaluate_policy(policy_checkpoint_path, env_name, num_episodes=100, device='cuda'):
-    checkpoint = torch.load(policy_checkpoint_path, map_location='cpu')
+def load_and_evaluate_policy(exp_name, npz_number, env_name, num_episodes=100, device='cuda', decoder_path=None):
+    logger.info(f"Loading latent policy from experiment: {exp_name}")
     
-    cfg = checkpoint.get('cfg', {})
+    # First load the latent policy
+    latent_policy_path = paths.get_latent_policy_path(exp_name)
+    logger.info(f"Loading latent policy from: {latent_policy_path}")
+    latent_state_dicts = torch.load(latent_policy_path, map_location='cpu', weights_only=False)
     
-    policy = VJEPAActionPolicy(
-        num_actions=cfg.get('num_actions', 15),
-        train_backbone=cfg.get('finetune_backbone', False)
+    cfg = latent_state_dicts["cfg"]
+    
+    if isinstance(cfg, dict) and exp_name in cfg:
+        cfg = cfg[exp_name]
+    elif hasattr(cfg, 'keys') and exp_name in cfg.keys():
+        cfg = cfg[exp_name]
+    
+    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+    
+    default_cfg = OmegaConf.load("config.yaml")
+    default_cfg_dict = OmegaConf.to_container(default_cfg, resolve=True)
+    
+    merged_cfg = {**default_cfg_dict, **cfg_dict}
+    
+    cfg = config.get(base_cfg=OmegaConf.create(merged_cfg), use_cli_args=False)
+    
+    # Create and load the latent policy
+    policy = utils.create_policy(
+        cfg.model,
+        action_dim=cfg.model.la_dim,
+        state_dict=latent_state_dicts["policy"],
+        strict_loading=True,
     )
-    
-    policy.load_state_dict(checkpoint['model_state_dict'])
     policy = policy.to(device)
+    policy.eval()
     
-    print(f"Loaded policy from: {policy_checkpoint_path}")
-    print(f"Config: {cfg}")
+    # Now load the decoder
+    if decoder_path is None:
+        decoder_path = paths.get_decoded_policy_path(exp_name, n=npz_number)
+    logger.info(f"Loading decoder from: {decoder_path}")
     
+    try:
+        decoder_checkpoint = torch.load(decoder_path, map_location='cpu', weights_only=False)
+        decoder = LinearDecoder().to(device)
+        decoder.load_state_dict(decoder_checkpoint['decoder_state_dict'])
+        decoder.eval()
+        logger.info(f"Successfully loaded decoder trained on dataset size {npz_number}")
+    except FileNotFoundError:
+        logger.error(f"Decoder checkpoint not found at {decoder_path}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading decoder: {str(e)}")
+        raise
+    
+    logger.info(f"Starting evaluation on device: {device}")
     mean_return, std_return, returns = evaluate_agent(
-        policy, 
-        env_name, 
-        num_episodes, 
-        device,
-        num_frames=cfg.get('num_frames', 1),
-        image_size=cfg.get('image_size', 256)
+        policy, decoder, env_name, num_episodes, device
     )
+    logger.info(f"Evaluation complete.")
     
-    return mean_return, std_return, returns
-
-
-def main():
-    parser = argparse.ArgumentParser(description='Evaluate V-JEPA trained policy')
-    parser.add_argument('policy_checkpoint_path', type=str, help='Path to the checkpoint file')
-    parser.add_argument('env_name', type=str, help='Name of the procgen environment')
-    parser.add_argument('--num_episodes', type=int, default=100, help='Number of episodes to evaluate')
-    parser.add_argument('--device', type=str, default='cuda', help='Device to run on')
-    
-    args = parser.parse_args()
-    
-    if not Path(args.policy_checkpoint_path).exists():
-        print(f"Error: Checkpoint file not found: {args.policy_checkpoint_path}")
-        return
-    
-    print(f"Evaluating policy from checkpoint: {args.policy_checkpoint_path}")
-    print(f"Environment: {args.env_name}")
-    print(f"Number of episodes: {args.num_episodes}")
-    print(f"Device: {args.device}")
-    print("-" * 50)
-    
-    mean_return, std_return, returns = load_and_evaluate_policy(
-        args.policy_checkpoint_path, args.env_name, args.num_episodes, args.device
-    )
+    # Сохраняем результаты в отдельный файл
+    results_filename = f"logs/results_{exp_name}_n{npz_number}_{env_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(results_filename, 'w') as f:
+        f.write(f"Experiment: {exp_name}\n")
+        f.write(f"Decoder dataset size: {npz_number}\n")
+        f.write(f"Environment: {env_name}\n")
+        f.write(f"Number of episodes: {num_episodes}\n")
+        f.write(f"Device: {device}\n")
+        f.write(f"Mean Return: {mean_return:.2f} ± {std_return:.2f}\n")
+        f.write(f"Min Return: {np.min(returns):.2f}\n")
+        f.write(f"Max Return: {np.max(returns):.2f}\n")
+        f.write(f"All returns: {returns}\n")
+    logger.info(f"Results saved to: {results_filename}")
     
     return mean_return, std_return, returns
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    if len(sys.argv) < 4:
+        print("Usage: python evaluate.py <exp_name> <npz_number> <env_name> [num_episodes] [device]")
+        print("Example: python evaluate.py my_experiment 256 coinrun 100 cuda:0")
+        sys.exit(1)
+    
+    exp_name = sys.argv[1]
+    npz_number = int(sys.argv[2])
+    env_name = sys.argv[3]
+    num_episodes = int(sys.argv[4]) if len(sys.argv) > 4 else 100
+    device = sys.argv[5] if len(sys.argv) > 5 else 'cuda'
+
+    # Переинициализируем логгер с правильным именем файла
+    logger, log_filename = setup_logger(f"{exp_name}_n{npz_number}")
+    
+    logger.info("="*50)
+    logger.info("STARTING NEW EVALUATION SESSION")
+    logger.info(f"Experiment: {exp_name}")
+    logger.info(f"Decoder dataset size: {npz_number}")
+    logger.info(f"Environment: {env_name}")
+    logger.info(f"Number of episodes: {num_episodes}")
+    logger.info(f"Device: {device}")
+    logger.info(f"Log file: {log_filename}")
+    logger.info("="*50)
+
+    try:
+        mean_return, std_return, returns = load_and_evaluate_policy(
+            exp_name, npz_number, env_name, num_episodes=10, device=str(device),
+            decoder_path=checkpoint_path  # pass this as an extra argument, see below
+        )
+        logger.info("Evaluation completed successfully!")
+    except Exception as e:
+        logger.error(f"Error during evaluation: {str(e)}", exc_info=True)
+        raise

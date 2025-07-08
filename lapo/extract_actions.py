@@ -1,9 +1,14 @@
 import numpy as np
 import glob
+import argparse
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--N', type=int, default=256, help='Number of samples to extract')
+args = parser.parse_args()
+
+N = args.N
 
 games = ['bigfish']
-N = 256
 
 for game in games:
     paths = glob.glob(f"expert_data/{game}/train/*.npz")
