@@ -363,7 +363,11 @@ class IDM(nn.Module):
         self.conv_stack, self.fc = get_impala(
             obs_shape, impala_scale, impala_channels, impala_features
         )
-        self.policy_head = nn.Linear(impala_features, action_dim)
+        self.policy_head = nn.Sequential(
+            nn.Linear(impala_features, 128),
+            nn.GELU(),
+            nn.Linear(128, action_dim)
+        )
 
         # initialize quantizer
         self.vq = VQEmbeddingEMA(vq_config)
@@ -424,6 +428,48 @@ class LinearDecoder(nn.Module):
         return self.fc(z)                   
 
 
+
+import torch
+import torch.nn as nn
+from torchvision.models.resnet import resnet18
+
+class BYOLEncoder(nn.Module):
+    def __init__(self, obs_dim, hidden_dim=512):
+        super().__init__()
+        # Используем уменьшенный ResNet в качестве энкодера
+        self.encoder = resnet18(pretrained=False)
+        self.encoder.conv1 = nn.Conv2d(obs_dim[0], 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.encoder.fc = nn.Linear(512, hidden_dim)
+        
+    def forward(self, x):
+        return self.encoder(x)
+
+class StateActionPredictor(nn.Module):
+    def __init__(self, obs_dim, action_dim, hidden_dim=512):
+        super().__init__()
+        self.encoder = BYOLEncoder(obs_dim, hidden_dim)
+        self.state_predictor = nn.Sequential(
+            nn.Linear(hidden_dim + action_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        self.action_head = nn.Linear(hidden_dim, action_dim)
+        
+    def forward(self, current_obs, action):
+        current_feat = self.encoder(current_obs)
+        next_feat = self.state_predictor(torch.cat([current_feat, action], dim=1))
+        pred_action = self.action_head(next_feat)
+        return next_feat, pred_action
+
+class LinearDecoder(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.fc = nn.Linear(in_dim, out_dim)
+        
+    def forward(self, x):
+        return self.fc(x)
+
+        
 
 if __name__ == "__main__":
     import torchinfo

@@ -7,6 +7,8 @@ model:
   wm_scale: 24
   idm_impala_scale: 4
   policy_impala_scale: 4
+  # hid_dim: 128  # <-- добавлено сюда
+  # la_dim: 128
   vq:
     enabled: true
     num_codebooks: 2
@@ -51,6 +53,8 @@ stage3:
 mlp_mapping:
   mode:        offline_bc
   offline_data: offline_decoder_data/bigfish_256.npz
-  epochs:      50000
+  epochs:      3000
   lr:          1e-3
+  hid_dim:     128  
+  
 

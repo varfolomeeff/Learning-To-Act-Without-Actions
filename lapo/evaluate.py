@@ -167,7 +167,7 @@ def load_and_evaluate_policy(exp_name, npz_number, env_name, num_episodes=100, d
     
     try:
         decoder_checkpoint = torch.load(decoder_path, map_location='cpu', weights_only=False)
-        decoder = LinearDecoder().to(device)
+        decoder = LinearDecoder(cfg.model.la_dim, cfg.model.ta_dim).to(device)
         decoder.load_state_dict(decoder_checkpoint['decoder_state_dict'])
         decoder.eval()
         logger.info(f"Successfully loaded decoder trained on dataset size {npz_number}")
@@ -230,7 +230,7 @@ if __name__ == "__main__":
 
     try:
         mean_return, std_return, returns = load_and_evaluate_policy(
-            exp_name, npz_number, env_name, num_episodes=10, device=str(device),
+            exp_name, npz_number, env_name, num_episodes=100, device=str(device),
             decoder_path=checkpoint_path  # pass this as an extra argument, see below
         )
         logger.info("Evaluation completed successfully!")

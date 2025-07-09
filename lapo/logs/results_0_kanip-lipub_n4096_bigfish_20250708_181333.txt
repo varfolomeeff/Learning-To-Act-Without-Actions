@@ -1,0 +1,9 @@
+Experiment: 0_kanip-lipub
+Decoder dataset size: 4096
+Environment: bigfish
+Number of episodes: 10
+Device: cuda:0
+Mean Return: 5.40 ± 11.76
+Min Return: 0.00
+Max Return: 40.00
+All returns: [40.0, 8.0, 2.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 1.0]

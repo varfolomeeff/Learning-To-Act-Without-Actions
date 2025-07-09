@@ -1,0 +1,28 @@
+entity: sergeydavidenko3461
+project: lapo
+program: mlp_mapping.py
+method: grid  # Используем полный перебор комбинаций параметров
+command:
+  - python
+  - mlp_mapping.py
+  - --base_exp_name
+  - 0_kanip-lipub
+  - ${args}
+metric:
+  name: val_loss  # Целевая метрика (может быть accuracy и др.)
+  goal: minimize  # Или maximize, если метрика типа accuracy
+parameters:
+  learning_rate:
+    values: [0.0001, 0.0003, 0.001, 0.003, 0.005]
+  batch_size:
+    values: [128, 256, 512]  # Ориентируемся на ваше значение 256
+  hidden_size:
+    values: [128, 256, 512]  # Аналогично hidden layer
+  optimizer:
+    values: ["adam", "sgd", "rmsprop"]  # Добавим выбор оптимизатора
+  dropout:
+    values: [0.0, 0.2, 0.4]  # Регуляризация, если используется
+early_terminate:
+  type: hyperband  # Автоматически останавливает неудачные запуски
+  min_iter: 1000   # Минимальное число шагов
+  max_iter: 4000   # Максимальное (можно уменьшить, если долго) 

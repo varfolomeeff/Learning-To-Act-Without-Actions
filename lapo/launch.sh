@@ -36,7 +36,7 @@ echo $gpu
 	# generate a random experiment name that's the same across stages 1-3
 	exp_name="${ind}_${sweep_name}"
 	echo $exp_name
-# python stage1_idm.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu" &&
+python stage1_idm.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu" &&
 python stage2_bc.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu"
 # python stage3_decoding.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu"
 # python mlp_mapping.py env_name="${tasks[${ind}]}" exp_name="${exp_name}" gpu="$gpu"

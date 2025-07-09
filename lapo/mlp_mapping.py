@@ -12,6 +12,7 @@ import utils
 from models import LinearDecoder
 from omegaconf import OmegaConf
 from evaluate import load_and_evaluate_policy
+import wandb
 
 
 sys.argv = [arg for arg in sys.argv if not arg.startswith("gpu=")]
@@ -22,17 +23,25 @@ def get_arg(name, default):
             return arg.split("=", 1)[1]
     return default
 
-gpu = int(get_arg("gpu", 0))
+gpu = int(get_arg("gpu", 1))
 device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--npz', type=int, default=256, help='Number in the offline_decoder_data/{env_name}_{npz}.npz filename')
 parser.add_argument('--env_name', type=str, default='bigfish', help='Environment name')
-parser.add_argument('--exp_name', type=str, required=True, help='Experiment name')
-args = parser.parse_args()
+parser.add_argument('--exp_name', type=str, default=None, help='Experiment name')
+parser.add_argument('--base_exp_name', type=str, default='bigfish', help='Experiment name to load policy from')
+args, unknown = parser.parse_known_args()
 
 env_name = args.env_name
-exp_name = args.exp_name
+base_exp_name = args.base_exp_name
+
+wandb.init()  # This must be called before using wandb.run
+
+if args.exp_name is None:
+    exp_name = f"sweep_{wandb.run.id}"
+else:
+    exp_name = args.exp_name
 
 print(f"env_name: {env_name}")
 
@@ -63,7 +72,7 @@ def print_all_keys(d, prefix=''):
             print_all_keys(item, prefix + f'[{i}] ')
 
 state_dicts = torch.load(
-    paths.get_latent_policy_path(exp_name),
+    paths.get_latent_policy_path(base_exp_name),
     map_location='cpu',
     weights_only=False
 )
@@ -98,7 +107,7 @@ policy.eval()
 for p in policy.parameters():           
     p.requires_grad_(False)
 
-decoder = LinearDecoder().to(device)
+decoder = LinearDecoder(cfg.model.la_dim, cfg.model.ta_dim).to(device)
 
 npz_number = args.npz
 npz_path = f"offline_decoder_data/{env_name}_{npz_number}.npz"
@@ -132,6 +141,11 @@ print("Dataset size:", len(dataset))
 
 opt = torch.optim.Adam(decoder.parameters(), lr=1e-3)
 
+# Используйте wandb.config для доступа к параметрам sweep
+cfg.mlp_mapping.lr = wandb.config.get("learning_rate", 1e-3)
+cfg.mlp_mapping.hid_dim = wandb.config.get("hidden_size", 256)
+# и т.д. для других параметров
+
 for epoch in range(cfg.mlp_mapping.epochs):         
     epoch_loss = 0
     num_batches = 0
@@ -153,6 +167,10 @@ for epoch in range(cfg.mlp_mapping.epochs):
 
         epoch_loss += loss.item()
         num_batches += 1
+        
+        
+        wandb.log({"train_loss": loss.item(), "epoch": epoch})
+
 
     avg_loss = epoch_loss / num_batches if num_batches > 0 else float('nan')
     print(f"Epoch {epoch+1}/{cfg.mlp_mapping.epochs}, Loss: {avg_loss:.4f}")
@@ -169,6 +187,16 @@ for epoch in range(cfg.mlp_mapping.epochs):
         # Evaluate after saving checkpoint
         print(f"Evaluating decoder at epoch {epoch}...")
         mean_return, std_return, returns = load_and_evaluate_policy(
-            checkpoint_path, npz_number, env_name, num_episodes=10, device=str(device)
+            base_exp_name, npz_number, env_name, num_episodes=100, device=str(device),
+            decoder_path=checkpoint_path
         )
         print(f"Eval result at epoch {epoch}: mean_return={mean_return:.2f} ± {std_return:.2f}")
+
+        wandb.log({
+        "mean_return": mean_return,
+        "std_return": std_return,
+        "min_return": min(returns),
+        "max_return": max(returns),
+        "all_returns": returns,
+        "epoch": epoch
+        })

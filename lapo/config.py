@@ -33,6 +33,7 @@ class ModelConfig:
     wm_scale: int
     idm_impala_scale: int
     policy_impala_scale: int
+    hid_dim: int  # Added to match config.yaml
     vq: VQConfig
     la_dim: int
     ta_dim: int
@@ -87,6 +88,7 @@ class MLP3Config:
     offline_data: str
     epochs: int
     lr: float
+    hid_dim: int  
 
 
 @dataclass
@@ -130,8 +132,11 @@ def get(
     # _apply_runtime_vals(cfg)  # type: ignore
 
     cfg_schema: Config = OmegaConf.structured(Config)
-    
-    return OmegaConf.merge(cfg_schema, cfg)
+    merged_cfg = OmegaConf.merge(cfg_schema, cfg)
+
+    _apply_runtime_vals(merged_cfg)  # <-- Add this line
+
+    return merged_cfg
 
 
 def _apply_runtime_vals(cfg: Config) -> None:
