@@ -6,6 +6,7 @@ from typing import Literal
 import numpy as np
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoModel, AutoVideoProcessor
 from tqdm.auto import tqdm
@@ -65,7 +66,7 @@ class VJEPAActionPolicy(nn.Module):
 
 
 def train(cfg):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
     ds = ProcgenNPZ(
         cfg.data_path,
         num_frames=cfg.num_frames,
@@ -81,25 +82,24 @@ def train(cfg):
     )
 
     model = VJEPAActionPolicy(cfg.num_actions, cfg.finetune_backbone).to(device)
-    crit = nn.CrossEntropyLoss()
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=1e-4)
-    scaler = torch.cuda.amp.GradScaler(enabled=cfg.mixed_precision)
 
     Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
 
     for epoch in range(cfg.epochs):
         model.train()
         running = 0.0
-        pbar = tqdm(dl, desc=f"[epoch {epoch+1}/{cfg.epochs}]", leave=False)
+
+        pbar = tqdm(dl, desc=f"[epoch {epoch + 1}/{cfg.epochs}]", leave=False)
         for px, act in pbar:
             px, act = px.to(device, non_blocking=True), act.to(device, non_blocking=True)
+
             opt.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=cfg.mixed_precision):
-                logits = model(px)
-                loss = crit(logits, act)
-            scaler.scale(loss).backward()
-            scaler.step(opt)
-            scaler.update()
+            logits = model(px)
+            loss = F.cross_entropy(logits, act, label_smoothing=0.05)
+            loss.backward()
+            opt.step()
+
             running += loss.item() * px.size(0)
             pbar.set_postfix(loss=f"{loss.item():.4f}")
         print(f"➤ epoch {epoch+1}: mean CE {running/len(ds):.4f}")

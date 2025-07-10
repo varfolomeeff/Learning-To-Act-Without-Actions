@@ -42,11 +42,11 @@ tr_list=(16 64 256 1024 4096)
 	# sleep 3
 	# echo "stage 1 done"
 	# # NOTE: mlp_mapping.py should parse env_name and exp_name from sys.argv as key=value
-	python mlp_mapping.py gpu="$gpu" --npz 4096 --env_name "${tasks[0]}" --exp_name "${exp_name}" --base_exp_name "${exp_name}"
+	python mlp_mapping.py gpu="$gpu" --npz 256 --env_name "${tasks[0]}" --exp_name "${exp_name}" --base_exp_name "${exp_name}"
 	echo "stage 2 done"
 	# sleep 3
 	# python evaluate.py "${exp_name}" 4096 "bigfish" 100 cuda:1
-	sleep 3
-	echo "stage 3 done"
+	# sleep 3
+	# echo "stage 3 done"
 	# sleep 10
 # done

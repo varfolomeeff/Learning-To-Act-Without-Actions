@@ -1,4 +1,4 @@
-env_name: bigfish
+env_name: maze
 exp_name: ~ # filled in by the launch.sh script (consistent across stages 1-3)
 stage_exp_name: ~ # updated in stages 1-3, used for wandb logging as a suffix
 
@@ -7,8 +7,8 @@ model:
   wm_scale: 24
   idm_impala_scale: 4
   policy_impala_scale: 4
-  # hid_dim: 128  # <-- добавлено сюда
-  # la_dim: 128
+  hid_dim: 128
+  la_dim: 15
   vq:
     enabled: true
     num_codebooks: 2
@@ -54,7 +54,7 @@ mlp_mapping:
   mode:        offline_bc
   offline_data: offline_decoder_data/bigfish_256.npz
   epochs:      3000
-  lr:          1e-3
-  hid_dim:     128  
+  lr:          3e-4
+  hid_dim:     16  
   
 

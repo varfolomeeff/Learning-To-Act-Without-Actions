@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import config, paths
 import utils
 from models import LinearDecoder
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, DictConfig
 from evaluate import load_and_evaluate_policy
 import wandb
 
@@ -55,12 +55,14 @@ def remove_script_keys(d):
     elif isinstance(d, list):
         for item in d:
             remove_script_keys(item)
-    elif hasattr(d, 'keys') and callable(d.keys):  # OmegaConf DictConfig
+    elif isinstance(d, DictConfig):
         keys_to_remove = [k for k in d.keys() if str(k).startswith('--')]
+        for k in d.keys():
+            if OmegaConf.is_missing(d, k):
+                continue
+            remove_script_keys(d[k])
         for k in keys_to_remove:
             del d[k]
-        for k in d.keys():
-            remove_script_keys(d[k])
 
 def print_all_keys(d, prefix=''):
     if isinstance(d, dict):
@@ -110,14 +112,13 @@ for p in policy.parameters():
 decoder = LinearDecoder(cfg.model.la_dim, cfg.model.ta_dim).to(device)
 
 npz_number = args.npz
-npz_path = f"offline_decoder_data/{env_name}_{npz_number}.npz"
-
+# npz_path = f"offline_decoder_data/{env_name}_{npz_number}.npz"
+npz_path = "/home/user6/projects/lapo/lapo/expert_data/bigfish/train/0.npz"
 data_npz = np.load(npz_path)
 
 def normalize_obs(obs: torch.Tensor) -> torch.Tensor:
-    # obs should be uint8 (not floating point) before normalization
-    assert not torch.is_floating_point(obs), "Observation tensor should be uint8 before normalization"
-    return obs.float() / 255.0 - 0.5
+    assert not torch.is_floating_point(obs)
+    return obs.float() / 255 - 0.5
 
 obs_data = torch.tensor(data_npz["obs"])
 obs_data = normalize_obs(obs_data)
@@ -132,18 +133,18 @@ dataset = torch.utils.data.TensorDataset(
 )
 loader = torch.utils.data.DataLoader(
     dataset,
-    batch_size=256, 
+    batch_size=128,
     shuffle=True, 
     drop_last=False
 )
 
 print("Dataset size:", len(dataset))
 
-opt = torch.optim.Adam(decoder.parameters(), lr=1e-3)
+opt = torch.optim.Adam(decoder.parameters(), lr=4e-4)
 
 # Используйте wandb.config для доступа к параметрам sweep
 cfg.mlp_mapping.lr = wandb.config.get("learning_rate", 1e-3)
-cfg.mlp_mapping.hid_dim = wandb.config.get("hidden_size", 256)
+cfg.mlp_mapping.hid_dim = wandb.config.get("hidden_size", 128)
 # и т.д. для других параметров
 
 for epoch in range(cfg.mlp_mapping.epochs):         
@@ -159,7 +160,7 @@ for epoch in range(cfg.mlp_mapping.epochs):
 
         action_logits = decoder(latent_actions)
 
-        loss = torch.nn.functional.cross_entropy(action_logits, ta)
+        loss = torch.nn.functional.cross_entropy(action_logits, ta, label_smoothing=0.05)
 
         opt.zero_grad()
         loss.backward()
@@ -173,8 +174,23 @@ for epoch in range(cfg.mlp_mapping.epochs):
 
 
     avg_loss = epoch_loss / num_batches if num_batches > 0 else float('nan')
-    print(f"Epoch {epoch+1}/{cfg.mlp_mapping.epochs}, Loss: {avg_loss:.4f}")
-    # Save checkpoint every 1000 epochs (excluding epoch 0)
+    # Calculate test accuracy on the full dataset after the epoch
+    with torch.no_grad():
+        all_preds = []
+        all_targets = []
+        for obs, ta in loader:
+            obs = obs.to(device)
+            ta = ta.to(device)
+            latent_actions = policy(obs)
+            action_logits = decoder(latent_actions)
+            preds = action_logits.argmax(dim=1)
+            all_preds.append(preds.cpu())
+            all_targets.append(ta.cpu())
+        all_preds = torch.cat(all_preds)
+        all_targets = torch.cat(all_targets)
+        test_acc = (all_preds == all_targets).float().mean().item()
+    wandb.log({"test_accuracy": test_acc, "epoch": epoch})
+    print(f"Epoch {epoch+1}/{cfg.mlp_mapping.epochs}, Loss: {avg_loss:.4f}, Test Accuracy: {test_acc:.4f}")
     if epoch > 0 and epoch % 200 == 0:
         base_dir = paths.get_experiment_dir(exp_name)
         checkpoint_name = f"decoded_policy_{npz_number}_epoch{epoch}.pt"
@@ -193,6 +209,7 @@ for epoch in range(cfg.mlp_mapping.epochs):
         print(f"Eval result at epoch {epoch}: mean_return={mean_return:.2f} ± {std_return:.2f}")
 
         wandb.log({
+            
         "mean_return": mean_return,
         "std_return": std_return,
         "min_return": min(returns),

@@ -420,9 +420,9 @@ class LinearDecoder(nn.Module):
     def __init__(self, z_dim=128, n_actions=15):
         super().__init__()
         self.fc = nn.Sequential(
-            nn.Linear(z_dim, 256),
+            nn.Linear(z_dim, 128),
             nn.GELU(),
-            nn.Linear(256, n_actions)
+            nn.Linear(128, n_actions)
         )
     def forward(self, z):
         return self.fc(z)                   
@@ -470,7 +470,6 @@ class LinearDecoder(nn.Module):
         return self.fc(x)
 
         
-
 if __name__ == "__main__":
     import torchinfo
 
