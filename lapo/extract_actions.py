@@ -8,7 +8,7 @@ args = parser.parse_args()
 
 N = args.N
 
-games = ['bigfish']
+games = ['maze']
 
 for game in games:
     paths = glob.glob(f"expert_data/{game}/train/*.npz")
