@@ -18,11 +18,11 @@ from torch.utils.data import DataLoader, TensorDataset
 from utils import create_decoder
 import os
 
-DEVICE = "cuda:0"
+DEVICE = "cuda:2"
 
 # 16, 64, 256, 1024, 4096
 TOTAL_SAMPLES = 4096
-SEED = 42
+SEED = 3
 
 @torch.no_grad()
 def evaluate_agent(
@@ -78,11 +78,11 @@ def main():
         entity="sergeydavidenko3461",
         project="airi-school-lapo",
         group="offline-decoder",
-        name=f"total-samples-{TOTAL_SAMPLES}-{SEED}"
+        name=f"total-samples-{TOTAL_SAMPLES}-{SEED}-bigfish"
     )
 
     state_dict = torch.load(
-        "/home/user6/projects/lapo/lapo/exp_results/0_maze_second_run/latent_policy.pt",
+        "/home/user6/projects/lapo/lapo/exp_results/0_kanip-lipub/latent_policy.pt",
         weights_only=False,
     )
     cfg = config.get(base_cfg=state_dict["cfg"], reload_keys=["stage3", "mlp_mapping"])

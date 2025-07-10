@@ -11,11 +11,15 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 from torchvision.transforms.functional import resize
 
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
 def preprocess(obs: np.ndarray) -> torch.Tensor:
     t = torch.from_numpy(obs).permute(2, 0, 1).float() / 255.0  # (3,64,64)
     return t
+
+def normalize_obs(obs: torch.Tensor) -> torch.Tensor:
+    assert not torch.is_floating_point(obs)
+    return obs.float() / 255 - 0.5
 
 
 class ResidualBlock(nn.Module):
@@ -49,10 +53,10 @@ class Decoder(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.ConvTranspose2d(z_channels*2, 64, 4, 2, 1), # 16→32
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             ResidualBlock(64), ResidualBlock(64),
             nn.ConvTranspose2d(64, 32, 4, 2, 1),   # 32→64
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             nn.Conv2d(32, 3, 1),
             nn.Sigmoid(),
         )
@@ -103,12 +107,16 @@ class VQVAE(nn.Module):
         self.dec = Decoder(z_channels)
 
     def forward(self, o_t, o_tm1):
+        print("VQVAE")
         z_t   = self.enc(o_t)
+        print("ENC")
         z_tm1 = self.enc(o_tm1)
+        print("ENC2")
         zq_t,  codes, loss_vq  = self.vq(z_t)
         zq_tm1 = self.vq.embed[codes.view(-1)].view_as(zq_t).detach()  # no grad
         recon = self.dec(zq_t, zq_tm1)
         loss_rec = F.mse_loss(recon, o_t)
+        print("LOSS", recon.shape, loss_rec)
         return recon, codes, loss_rec + loss_vq
 
 
@@ -127,29 +135,35 @@ class ProcgenNPZ():
     def __getitem__(self, idx):
         fid, i = self.index[idx]
         d = np.load(self.files[fid], mmap_mode="r")
-        obs = d["obs"][i]
-        if self.want_code:
-            code = d["code"][i]
-            act  = d["ta"][i]
-            return obs, code, act
-        else:
-            obs_tp1 = d["obs"][i+1] if i+1 < d["obs"].shape[0] else d["obs"][i]
-            return obs, obs_tp1
+        try:
+            obs  = normalize_obs(torch.from_numpy(d["obs"][i]))
+            next = normalize_obs(torch.from_numpy(d["obs"][i+1]))
+            obs  = (obs).permute(2,0,1)
+            next = (next).permute(2,0,1)
+            return obs, next
+        except Exception as e:
+            print("An Error Accured: ", e)
+            # obs = d["obs"][i]
+            # obs_tp1 = d["obs"][i+1] if i+1 < d["obs"].shape[0] else d["obs"][i]
+            # return obs, obs_tp1
 
 
 def train_vqvae(npz_path: str, out_ckpt: str, epochs=10, bs=128):
     ds  = ProcgenNPZ(npz_path)
-    dl  = DataLoader(ds, bs, shuffle=True, num_workers=4, pin_memory=True)
+    dl  = DataLoader(ds, bs, shuffle=True, num_workers=0, pin_memory=True, persistent_workers=False)
     vqvae = VQVAE(z_channels=64, K=64).to(DEVICE)
     opt   = torch.optim.Adam(vqvae.parameters(), lr=3e-4)
+    print("TIGER")
 
     for ep in range(epochs):
         vqvae.train()
         running = 0.0
+        print("ABOBA")
         for o, o1 in dl:
+            print(type(o), type(o1))
             o, o1 = o.to(DEVICE), o1.to(DEVICE)
             recon, codes, loss = vqvae(o, o1)
-            print(f"Loss values: recon - {recon}, vq - {loss}")
+            print(f"Loss values: recon - {recon.shape}, vq - {loss}")
             opt.zero_grad(); loss.backward(); opt.step()
             running += loss.item() * o.size(0)
         print(f"VQ‑VAE epoch {ep+1}/{epochs}  loss={running/len(ds):.4f}")
@@ -198,10 +212,12 @@ class Code2Action(nn.Module):
 
 
 def train_bc(npz_path: str, vq_ckpt: str, out_ckpt: str, epochs=3, bs=1024):
+    torch.autograd.set_detect_anomaly(True)
     vqvae = VQVAE(z_channels=64, K=64).to(DEVICE)
     vqvae.load_state_dict(torch.load(vq_ckpt, map_location=DEVICE)['model'])
     bc_ds = BCData(npz_path, vqvae)
     dl    = DataLoader(bc_ds, bs, shuffle=True, num_workers=4, pin_memory=True)
+    torch.autograd.set_detect_anomaly(True)
 
     decoder = Code2Action(K=64).to(DEVICE)
     opt     = torch.optim.Adam(decoder.parameters(), lr=1e-3)
